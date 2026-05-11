@@ -1,5 +1,3 @@
-
-
       {deleteModal && (
         <div style={css.overlay}>
           <div style={css.modal}>
