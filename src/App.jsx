@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 import {
   collection, addDoc, deleteDoc, doc,
@@ -7,7 +7,7 @@ import {
 
 const DELETE_PASSWORD = "940822";
 const fmtEUR  = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n);
-const fmtUSDT = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n);
+const fmtUSDT = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:4, maximumFractionDigits:4 }).format(n);
 const todayDate = () => new Date().toLocaleDateString("es-ES");
 const nowTime   = () => new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
 const monthKey  = (d) => d.slice(3);
@@ -28,6 +28,12 @@ export default function App() {
   const [deleteModal, setDeleteModal] = useState(null);
   const [deletePass, setDeletePass]   = useState("");
   const [deleteError, setDeleteError] = useState("");
+  const [showCalc, setShowCalc]       = useState(false);
+  const [calcEur, setCalcEur]         = useState("");
+  const [calcRate, setCalcRate]       = useState("");
+  const [clientSuggestions, setClientSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions]     = useState(false);
+  const clientRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setClock(nowTime()), 30000);
@@ -42,6 +48,27 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  // unique client names from history
+  const knownClients = [...new Set(txs.map(t => t.client).filter(Boolean))];
+
+  const handleClientInput = (val) => {
+    setForm({...form, client: val});
+    if (val.length >= 1) {
+      const matches = knownClients.filter(c =>
+        c.toLowerCase().includes(val.toLowerCase()) && c.toLowerCase() !== val.toLowerCase()
+      );
+      setClientSuggestions(matches);
+      setShowSuggestions(matches.length > 0);
+    } else {
+      setShowSuggestions(false);
+    }
+  };
+
+  const selectClient = (name) => {
+    setForm({...form, client: name});
+    setShowSuggestions(false);
+  };
 
   const showFlash = (type, msg) => { setFlash({type,msg}); setTimeout(()=>setFlash(null), 3500); };
 
@@ -73,18 +100,26 @@ export default function App() {
   };
 
   const confirmDelete = async () => {
-    if (deletePass !== DELETE_PASSWORD) {
-      setDeleteError("❌ Contraseña incorrecta.");
-      return;
-    }
+    if (deletePass !== DELETE_PASSWORD) { setDeleteError("❌ Contraseña incorrecta."); return; }
     try {
       await deleteDoc(doc(db, "transacciones", deleteModal.id));
       setDeleteModal(null);
       showFlash("ok", "✓ Operación eliminada correctamente.");
-    } catch {
-      setDeleteError("Error al eliminar. Intentá de nuevo.");
-    }
+    } catch { setDeleteError("Error al eliminar. Intentá de nuevo."); }
   };
+
+  // current month summary (only current month)
+  const currentMonthKey = (() => { const d=new Date(); return `${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`; })();
+  const currentMonthTxs = txs.filter(t => monthKey(t.date) === currentMonthKey);
+  const cmEur    = currentMonthTxs.reduce((s,t)=>s+t.eurAmount,0);
+  const cmIn     = currentMonthTxs.reduce((s,t)=>s+t.usdtIn,0);
+  const cmOut    = currentMonthTxs.reduce((s,t)=>s+t.usdtOut,0);
+  const cmUtil   = cmIn - cmOut;
+  const [cmMm, cmYyyy] = currentMonthKey.split("/");
+  const cmLabel  = `${MONTHS_ES[parseInt(cmMm)-1]} ${cmYyyy}`;
+
+  // calculator
+  const calcResult = calcEur && calcRate ? (parseFloat(calcEur) * parseFloat(calcRate)).toFixed(4) : null;
 
   const byMonth = {};
   txs.forEach((t) => { const k=monthKey(t.date); if(!byMonth[k])byMonth[k]=[]; byMonth[k].push(t); });
@@ -115,6 +150,7 @@ export default function App() {
     liveChip:{ display:"flex", alignItems:"center", gap:6, background:"#00e59614", border:"1px solid #00e59640", borderRadius:4, padding:"3px 10px", fontSize:9, color:C.green, letterSpacing:2 },
     dot:{ width:7, height:7, borderRadius:"50%", background:C.green, boxShadow:"0 0 6px #00e596" },
     clk:{ fontSize:15, color:C.blue, fontWeight:700, marginLeft:10 },
+    calcBtn:{ background:"#1a3050", border:`1px solid ${C.border}`, color:C.accent, borderRadius:6, padding:"6px 14px", fontSize:10, cursor:"pointer", fontFamily:"inherit", letterSpacing:1 },
     nav:{ display:"flex", background:C.panel, borderBottom:`1px solid ${C.border}`, padding:"0 24px" },
     nbtn:{ background:"none", border:"none", color:C.muted, padding:"13px 18px", cursor:"pointer", fontSize:10, letterSpacing:2, borderBottom:"3px solid transparent", fontFamily:"inherit" },
     nact:{ color:C.accent, borderBottomColor:C.accent },
@@ -128,10 +164,21 @@ export default function App() {
     td:{ padding:"8px 11px", borderBottom:"1px solid #0e1e30", whiteSpace:"nowrap" },
     empty:{ color:C.muted, padding:"20px 0", fontSize:12 },
     div:{ borderTop:`1px solid ${C.border}`, margin:"24px 0" },
+    // monthly bar
+    monthBar:{ background:C.card, border:`1px solid #1e4070`, borderRadius:10, padding:"14px 20px", marginBottom:20, display:"flex", flexWrap:"wrap", gap:16, alignItems:"center" },
+    mbLabel:{ fontSize:10, color:C.muted, letterSpacing:1.5, marginRight:4, whiteSpace:"nowrap" },
+    mbStat:{ display:"flex", flexDirection:"column", gap:2 },
+    mbStatLabel:{ fontSize:8, color:C.muted, letterSpacing:1.5 },
+    mbStatValue:{ fontSize:15, fontWeight:700 },
+    mbUtility:{ display:"flex", flexDirection:"column", gap:2, background:cmUtil>=0?"#00e59610":"#ff444410", border:`1px solid ${cmUtil>=0?"#00e59640":"#ff444440"}`, borderRadius:8, padding:"8px 16px" },
+    mbUtilityLabel:{ fontSize:8, color:C.muted, letterSpacing:1.5 },
+    mbUtilityValue:{ fontSize:22, fontWeight:700, color:cmUtil>=0?C.green:C.red },
+    // pills
     pills:{ display:"flex", flexWrap:"wrap", gap:8, marginTop:14, alignItems:"center" },
     pill:{ display:"flex", flexDirection:"column", background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:8, padding:"7px 13px", minWidth:110 },
     plbl:{ fontSize:8, color:C.muted, letterSpacing:1.5, marginBottom:2 },
     pval:{ fontSize:13, fontWeight:700 },
+    // close card
     cc:{ background:C.card, border:"1px solid #1e4070", borderRadius:12, padding:"22px 24px" },
     ccTitle:{ display:"flex", alignItems:"center", gap:10, marginBottom:18 },
     ccTxt:{ fontSize:12, fontWeight:700, color:C.accent, letterSpacing:2 },
@@ -143,17 +190,19 @@ export default function App() {
     cisub:{ fontSize:9, color:C.muted },
     ccdiv:{ borderTop:`1px solid ${C.border}`, margin:"14px 0" },
     ccfact:{ fontSize:11, color:C.muted },
+    // form
     fgrid:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 },
-    fw:{ display:"flex", flexDirection:"column", gap:4 },
+    fw:{ display:"flex", flexDirection:"column", gap:4, position:"relative" },
     flbl:{ fontSize:9, color:C.muted, letterSpacing:1.5 },
     finp:{ background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:6, padding:"9px 11px", color:C.text, fontSize:12, fontFamily:"inherit", outline:"none" },
-    calc:{ display:"flex", alignItems:"center", gap:8, background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:8, padding:"9px 14px", marginBottom:14 },
+    calc2:{ display:"flex", alignItems:"center", gap:8, background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:8, padding:"9px 14px", marginBottom:14 },
     sbtn:{ background:C.accent, color:C.bg, border:"none", borderRadius:8, padding:"12px 26px", fontSize:11, fontWeight:700, letterSpacing:2, cursor:"pointer", fontFamily:"inherit" },
     sel:{ background:"#0a1830", border:`1px solid ${C.border}`, color:C.text, padding:"5px 10px", borderRadius:6, fontSize:11, fontFamily:"inherit" },
     flash_ok:{ margin:"10px 24px 0", padding:"9px 16px", border:"1px solid #00e596", borderRadius:6, fontSize:12, background:"#00e59618", color:C.green },
     flash_err:{ margin:"10px 24px 0", padding:"9px 16px", border:"1px solid #ff4444", borderRadius:6, fontSize:12, background:"#ff444418", color:"#ff8888" },
     spinner:{ display:"flex", justifyContent:"center", alignItems:"center", height:"60vh", color:C.muted, fontSize:13, letterSpacing:2 },
     delbtn:{ background:"none", border:"1px solid #ff444440", borderRadius:4, color:C.red, padding:"3px 8px", fontSize:10, cursor:"pointer", fontFamily:"inherit" },
+    // delete modal
     overlay:{ position:"fixed", inset:0, background:"#000000cc", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" },
     modal:{ background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:12, padding:"28px 32px", width:320, display:"flex", flexDirection:"column", gap:14 },
     modalTitle:{ fontSize:14, fontWeight:700, color:C.red, letterSpacing:1 },
@@ -163,6 +212,20 @@ export default function App() {
     modalBtns:{ display:"flex", gap:10 },
     modalConfirm:{ flex:1, background:C.red, color:"#fff", border:"none", borderRadius:6, padding:"10px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" },
     modalCancel:{ flex:1, background:"none", color:C.muted, border:`1px solid ${C.border}`, borderRadius:6, padding:"10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" },
+    // side calculator
+    calcOverlay:{ position:"fixed", inset:0, background:"#000000aa", zIndex:200, display:"flex", justifyContent:"flex-end" },
+    calcPanel:{ background:"#0a1830", borderLeft:`1px solid ${C.border}`, width:300, height:"100%", padding:"28px 22px", display:"flex", flexDirection:"column", gap:16, overflowY:"auto" },
+    calcTitle:{ fontSize:14, fontWeight:700, color:C.accent, letterSpacing:2 },
+    calcDesc:{ fontSize:10, color:C.muted, lineHeight:1.6 },
+    calcInp:{ background:"#060f1e", border:`1px solid ${C.border}`, borderRadius:6, padding:"10px 12px", color:C.text, fontSize:13, fontFamily:"inherit", outline:"none", width:"100%", boxSizing:"border-box" },
+    calcRow:{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:C.muted },
+    calcResult:{ background:"#00e59610", border:"1px solid #00e59640", borderRadius:8, padding:"14px 16px", display:"flex", flexDirection:"column", gap:4 },
+    calcResultLabel:{ fontSize:9, color:C.muted, letterSpacing:1.5 },
+    calcResultValue:{ fontSize:24, fontWeight:700, color:C.green },
+    calcClose:{ background:"none", border:`1px solid ${C.border}`, borderRadius:6, color:C.muted, padding:"10px", fontSize:11, cursor:"pointer", fontFamily:"inherit", marginTop:"auto" },
+    // autocomplete
+    suggBox:{ position:"absolute", top:"100%", left:0, right:0, background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:6, zIndex:50, overflow:"hidden" },
+    suggItem:{ padding:"8px 11px", fontSize:12, color:C.text, cursor:"pointer", borderBottom:`1px solid #0e1e30` },
   };
 
   const TxRow = ({ tx, i }) => {
@@ -179,7 +242,7 @@ export default function App() {
         <td style={{...css.td, color:util>=0?C.green:C.red, fontWeight:700}}>{util>=0?"+":""}{fmtUSDT(util)}</td>
         <td style={{...css.td, color:"#5a7a99", fontSize:10}}>{tx.note||"—"}</td>
         <td style={css.td}>
-          <button style={css.delbtn} onClick={()=>openDeleteModal(tx)}>🗑 Eliminar</button>
+          <button style={css.delbtn} onClick={()=>openDeleteModal(tx)}>🗑</button>
         </td>
       </tr>
     );
@@ -221,6 +284,29 @@ export default function App() {
     );
   };
 
+  // ── Monthly summary bar
+  const MonthBar = () => (
+    <div style={css.monthBar}>
+      <span style={css.mbLabel}>📊 {cmLabel.toUpperCase()} —</span>
+      {[
+        [`€${fmtEUR(cmEur)}`,"EUR procesados",C.accent],
+        [`${fmtUSDT(cmIn)} ₮`,"USDT recibido",C.recv],
+        [`${fmtUSDT(cmOut)} ₮`,"USDT enviado",C.sent],
+      ].map(([v,l,c])=>(
+        <div key={l} style={css.mbStat}>
+          <span style={css.mbStatLabel}>{l}</span>
+          <span style={{...css.mbStatValue,color:c}}>{v}</span>
+        </div>
+      ))}
+      <div style={{marginLeft:"auto"}}>
+        <div style={css.mbUtility}>
+          <span style={css.mbUtilityLabel}>UTILIDAD DEL MES</span>
+          <span style={css.mbUtilityValue}>{cmUtil>=0?"+":""}{fmtUSDT(cmUtil)} ₮</span>
+        </div>
+      </div>
+    </div>
+  );
+
   if (loading) return (
     <div style={{fontFamily:"monospace",background:"#060f1e",minHeight:"100vh",...css.spinner}}>
       CARGANDO DATOS...
@@ -230,16 +316,14 @@ export default function App() {
   return (
     <div style={css.root}>
 
+      {/* DELETE MODAL */}
       {deleteModal && (
         <div style={css.overlay}>
           <div style={css.modal}>
             <div style={css.modalTitle}>🗑 Eliminar operación</div>
             <div style={css.modalSub}>Cliente: <strong style={{color:C.text}}>{deleteModal.client}</strong></div>
             <div style={css.modalSub}>Ingresá la contraseña para confirmar:</div>
-            <input
-              style={css.modalInp}
-              type="password"
-              placeholder="••••••"
+            <input style={css.modalInp} type="password" placeholder="••••••"
               value={deletePass}
               onChange={e=>{ setDeletePass(e.target.value); setDeleteError(""); }}
               onKeyDown={e=>e.key==="Enter"&&confirmDelete()}
@@ -253,12 +337,49 @@ export default function App() {
         </div>
       )}
 
+      {/* SIDE CALCULATOR */}
+      {showCalc && (
+        <div style={css.calcOverlay} onClick={()=>setShowCalc(false)}>
+          <div style={css.calcPanel} onClick={e=>e.stopPropagation()}>
+            <div style={css.calcTitle}>🧮 CALCULADORA</div>
+            <div style={css.calcDesc}>Calculá los USDT que recibirás del proveedor según el EUR enviado y la tasa del día.</div>
+            <div style={css.fw}>
+              <label style={css.flbl}>EUR enviado por el cliente</label>
+              <input style={css.calcInp} type="number" placeholder="Ej: 20.00"
+                value={calcEur} onChange={e=>setCalcEur(e.target.value)}/>
+            </div>
+            <div style={{...css.calcRow, fontSize:20, color:C.muted, justifyContent:"center"}}>×</div>
+            <div style={css.fw}>
+              <label style={css.flbl}>Tasa proveedor (USDT/EUR)</label>
+              <input style={css.calcInp} type="number" step="0.0001" placeholder="Ej: 0.9032"
+                value={calcRate} onChange={e=>setCalcRate(e.target.value)}/>
+            </div>
+            <div style={{...css.calcRow, fontSize:20, color:C.muted, justifyContent:"center"}}>=</div>
+            {calcResult ? (
+              <div style={css.calcResult}>
+                <span style={css.calcResultLabel}>USDT A RECIBIR DEL PROVEEDOR</span>
+                <span style={css.calcResultValue}>{calcResult} ₮</span>
+                <span style={{fontSize:10,color:C.muted}}>{calcEur} EUR × {calcRate} = {calcResult} USDT</span>
+              </div>
+            ) : (
+              <div style={{...css.calcResult, background:"#1a305020", borderColor:C.border}}>
+                <span style={css.calcResultLabel}>USDT A RECIBIR DEL PROVEEDOR</span>
+                <span style={{fontSize:18,color:C.muted}}>—</span>
+              </div>
+            )}
+            <button style={css.calcClose} onClick={()=>setShowCalc(false)}>✕ Cerrar calculadora</button>
+          </div>
+        </div>
+      )}
+
+      {/* HEADER */}
       <header style={css.header}>
         <div>
           <div style={css.logo}>MCONVERSIONES</div>
           <div style={css.tag}>By: RODRIGUEZPINAA / VZLA 🇻🇪</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button style={css.calcBtn} onClick={()=>setShowCalc(true)}>🧮 Calculadora</button>
           <div style={css.liveChip}><span style={css.dot}/> EN VIVO</div>
           <span style={css.clk}>{clock}</span>
         </div>
@@ -272,8 +393,10 @@ export default function App() {
         ))}
       </nav>
 
+      {/* HOY */}
       {view==="hoy" && (
         <section style={css.sec}>
+          <MonthBar />
           <div style={css.sh}>
             <h2 style={css.stitle}>Operaciones del día — {todayStr}</h2>
             <span style={css.badge}>{todayTxs.length} transacciones</span>
@@ -290,8 +413,10 @@ export default function App() {
         </section>
       )}
 
+      {/* CIERRE MENSUAL */}
       {view==="mes" && (
         <section style={css.sec}>
+          <MonthBar />
           <div style={css.sh}>
             <h2 style={css.stitle}>Cierre Mensual</h2>
             <select style={css.sel} value={filterMonth} onChange={e=>setFM(e.target.value)}>
@@ -334,16 +459,37 @@ export default function App() {
         </section>
       )}
 
+      {/* NUEVA OP */}
       {view==="new" && (
         <section style={css.sec}>
           <h2 style={{...css.stitle,marginBottom:18}}>Registrar nueva operación</h2>
           <div style={css.fgrid}>
+
+            {/* CLIENT with autocomplete */}
+            <div style={css.fw} ref={clientRef}>
+              <label style={css.flbl}>Cliente *</label>
+              <input style={css.finp} type="text" placeholder="Nombre completo"
+                value={form.client}
+                onChange={e=>handleClientInput(e.target.value)}
+                onBlur={()=>setTimeout(()=>setShowSuggestions(false),150)}
+                autoComplete="off"
+              />
+              {showSuggestions && (
+                <div style={css.suggBox}>
+                  {clientSuggestions.map(name=>(
+                    <div key={name} style={css.suggItem}
+                      onMouseDown={()=>selectClient(name)}
+                    >👤 {name}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {[
-              ["Cliente *","client","text","Nombre completo"],
               ["Cuenta / destino","account","text","Plataforma · @usuario"],
               ["Monto EUR *","eurAmount","number","0.00"],
-              ["USDT recibido *","usdtIn","number","0.00"],
-              ["USDT enviado *","usdtOut","number","0.00"],
+              ["USDT recibido *","usdtIn","number","0.0000"],
+              ["USDT enviado *","usdtOut","number","0.0000"],
               ["Nota","note","text","Opcional"],
             ].map(([lbl,key,type,ph])=>(
               <div key={key} style={css.fw}>
@@ -353,7 +499,7 @@ export default function App() {
             ))}
           </div>
           {form.usdtIn && form.usdtOut && (
-            <div style={css.calc}>
+            <div style={css.calc2}>
               <span style={{fontSize:10,color:C.muted,letterSpacing:1}}>Utilidad estimada:</span>
               <span style={{fontSize:16,fontWeight:700,color:(parseFloat(form.usdtIn||0)-parseFloat(form.usdtOut||0))>=0?C.green:C.red}}>
                 {fmtUSDT(parseFloat(form.usdtIn||0)-parseFloat(form.usdtOut||0))} USDT
