@@ -8,12 +8,19 @@ import {
 const DELETE_PASSWORD = "940822";
 const fmtEUR  = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:2, maximumFractionDigits:2 }).format(n);
 const fmtUSDT = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:4, maximumFractionDigits:4 }).format(n);
-const todayDate = () => new Date().toLocaleDateString("es-ES");
+const todayDate = () => {
+  const d = new Date();
+  return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear();
+};
 const nowTime   = () => new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
-const monthKey  = (d) => {
-  // d is like "DD/MM/YYYY"
+const monthKey = (d) => {
+  if (!d) return "";
   const parts = d.split("/");
-  if (parts.length === 3) return `${parts[1]}/${parts[2]}`;
+  if (parts.length === 3) {
+    const mm = parts[1].padStart(2,"0");
+    const yyyy = parts[2].length === 4 ? parts[2] : "20" + parts[2];
+    return mm + "/" + yyyy;
+  }
   return "";
 };
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -47,7 +54,17 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, "transacciones"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, (snap) => {
-      setTxs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      // Normalize dates to DD/MM/YYYY
+      const normalized = raw.map(tx => {
+        if (!tx.date) return tx;
+        // Already DD/MM/YYYY with 4-digit year
+        const parts = tx.date.split('/');
+        if (parts.length === 3 && parts[2].length === 4) return tx;
+        // Try to fix
+        return { ...tx, date: tx.date };
+      });
+      setTxs(normalized);
       setLoading(false);
     });
     return () => unsub();
