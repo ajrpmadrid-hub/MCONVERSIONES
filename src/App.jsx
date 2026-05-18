@@ -10,7 +10,12 @@ const fmtEUR  = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:2,
 const fmtUSDT = (n) => new Intl.NumberFormat("es-ES", { minimumFractionDigits:4, maximumFractionDigits:4 }).format(n);
 const todayDate = () => new Date().toLocaleDateString("es-ES");
 const nowTime   = () => new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
-const monthKey  = (d) => d.slice(3);
+const monthKey  = (d) => {
+  // d is like "DD/MM/YYYY"
+  const parts = d.split("/");
+  if (parts.length === 3) return `${parts[1]}/${parts[2]}`;
+  return "";
+};
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
 export default function App() {
@@ -31,9 +36,8 @@ export default function App() {
   const [showCalc, setShowCalc]       = useState(false);
   const [calcEur, setCalcEur]         = useState("");
   const [calcRate, setCalcRate]       = useState("");
-  const [clientSuggestions, setClientSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions]     = useState(false);
-  const clientRef = useRef(null);
+  const [showClientSugg, setShowClientSugg] = useState(false);
+  const [showAccountSugg, setShowAccountSugg] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setClock(nowTime()), 30000);
@@ -49,26 +53,16 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // unique client names from history
-  const knownClients = [...new Set(txs.map(t => t.client).filter(Boolean))];
+  // unique clients and accounts from history
+  const knownClients  = [...new Set(txs.map(t => t.client).filter(Boolean))];
+  const knownAccounts = [...new Set(txs.map(t => t.account).filter(Boolean))];
 
-  const handleClientInput = (val) => {
-    setForm({...form, client: val});
-    if (val.length >= 1) {
-      const matches = knownClients.filter(c =>
-        c.toLowerCase().includes(val.toLowerCase()) && c.toLowerCase() !== val.toLowerCase()
-      );
-      setClientSuggestions(matches);
-      setShowSuggestions(matches.length > 0);
-    } else {
-      setShowSuggestions(false);
-    }
-  };
-
-  const selectClient = (name) => {
-    setForm({...form, client: name});
-    setShowSuggestions(false);
-  };
+  const clientSuggestions  = form.client.length >= 1
+    ? knownClients.filter(c => c.toLowerCase().includes(form.client.toLowerCase()) && c.toLowerCase() !== form.client.toLowerCase())
+    : [];
+  const accountSuggestions = form.account.length >= 1
+    ? knownAccounts.filter(a => a.toLowerCase().includes(form.account.toLowerCase()) && a.toLowerCase() !== form.account.toLowerCase())
+    : [];
 
   const showFlash = (type, msg) => { setFlash({type,msg}); setTimeout(()=>setFlash(null), 3500); };
 
@@ -108,21 +102,34 @@ export default function App() {
     } catch { setDeleteError("Error al eliminar. Intentá de nuevo."); }
   };
 
-  // current month summary (only current month)
-  const currentMonthKey = (() => { const d=new Date(); return `${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`; })();
-  const currentMonthTxs = txs.filter(t => monthKey(t.date) === currentMonthKey);
-  const cmEur    = currentMonthTxs.reduce((s,t)=>s+t.eurAmount,0);
-  const cmIn     = currentMonthTxs.reduce((s,t)=>s+t.usdtIn,0);
-  const cmOut    = currentMonthTxs.reduce((s,t)=>s+t.usdtOut,0);
-  const cmUtil   = cmIn - cmOut;
-  const [cmMm, cmYyyy] = currentMonthKey.split("/");
-  const cmLabel  = `${MONTHS_ES[parseInt(cmMm)-1]} ${cmYyyy}`;
+  // ── Current month key based on real today
+  const now = new Date();
+  const currentMonthKey = `${String(now.getMonth()+1).padStart(2,"0")}/${now.getFullYear()}`;
+  const [cmMm, cmYyyy]  = currentMonthKey.split("/");
+  const cmLabel         = `${MONTHS_ES[parseInt(cmMm)-1]} ${cmYyyy}`;
 
-  // calculator
-  const calcResult = calcEur && calcRate ? (parseFloat(calcEur) * parseFloat(calcRate)).toFixed(4) : null;
+  // Filter transactions strictly to current month/year
+  const currentMonthTxs = txs.filter(t => {
+    const k = monthKey(t.date);
+    return k === currentMonthKey;
+  });
 
+  const cmEur  = currentMonthTxs.reduce((s,t)=>s+t.eurAmount, 0);
+  const cmIn   = currentMonthTxs.reduce((s,t)=>s+t.usdtIn, 0);
+  const cmOut  = currentMonthTxs.reduce((s,t)=>s+t.usdtOut, 0);
+  const cmUtil = cmIn - cmOut;
+
+  // Calculator: EUR / rate = USDT (divide, not multiply)
+  const calcResult = calcEur && calcRate && parseFloat(calcRate) !== 0
+    ? (parseFloat(calcEur) / parseFloat(calcRate)).toFixed(4)
+    : null;
+
+  // Group all txs by month
   const byMonth = {};
-  txs.forEach((t) => { const k=monthKey(t.date); if(!byMonth[k])byMonth[k]=[]; byMonth[k].push(t); });
+  txs.forEach((t) => {
+    const k = monthKey(t.date);
+    if (k) { if(!byMonth[k]) byMonth[k]=[]; byMonth[k].push(t); }
+  });
   const months = Object.keys(byMonth).sort((a,b)=>{
     const[ma,ya]=a.split("/").map(Number),[mb,yb]=b.split("/").map(Number);
     return ya!==yb?yb-ya:mb-ma;
@@ -164,21 +171,18 @@ export default function App() {
     td:{ padding:"8px 11px", borderBottom:"1px solid #0e1e30", whiteSpace:"nowrap" },
     empty:{ color:C.muted, padding:"20px 0", fontSize:12 },
     div:{ borderTop:`1px solid ${C.border}`, margin:"24px 0" },
-    // monthly bar
-    monthBar:{ background:C.card, border:`1px solid #1e4070`, borderRadius:10, padding:"14px 20px", marginBottom:20, display:"flex", flexWrap:"wrap", gap:16, alignItems:"center" },
-    mbLabel:{ fontSize:10, color:C.muted, letterSpacing:1.5, marginRight:4, whiteSpace:"nowrap" },
+    monthBar:{ background:C.card, border:`1px solid #1e4070`, borderRadius:10, padding:"14px 20px", marginBottom:20, display:"flex", flexWrap:"wrap", gap:20, alignItems:"center" },
+    mbLabel:{ fontSize:10, color:C.muted, letterSpacing:1.5, whiteSpace:"nowrap" },
     mbStat:{ display:"flex", flexDirection:"column", gap:2 },
     mbStatLabel:{ fontSize:8, color:C.muted, letterSpacing:1.5 },
-    mbStatValue:{ fontSize:15, fontWeight:700 },
-    mbUtility:{ display:"flex", flexDirection:"column", gap:2, background:cmUtil>=0?"#00e59610":"#ff444410", border:`1px solid ${cmUtil>=0?"#00e59640":"#ff444440"}`, borderRadius:8, padding:"8px 16px" },
+    mbStatValue:{ fontSize:14, fontWeight:700 },
+    mbUtility:{ display:"flex", flexDirection:"column", gap:2, background:cmUtil>=0?"#00e59610":"#ff444410", border:`1px solid ${cmUtil>=0?"#00e59640":"#ff444440"}`, borderRadius:8, padding:"10px 18px", marginLeft:"auto" },
     mbUtilityLabel:{ fontSize:8, color:C.muted, letterSpacing:1.5 },
-    mbUtilityValue:{ fontSize:22, fontWeight:700, color:cmUtil>=0?C.green:C.red },
-    // pills
+    mbUtilityValue:{ fontSize:24, fontWeight:700, color:cmUtil>=0?C.green:C.red },
     pills:{ display:"flex", flexWrap:"wrap", gap:8, marginTop:14, alignItems:"center" },
     pill:{ display:"flex", flexDirection:"column", background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:8, padding:"7px 13px", minWidth:110 },
     plbl:{ fontSize:8, color:C.muted, letterSpacing:1.5, marginBottom:2 },
     pval:{ fontSize:13, fontWeight:700 },
-    // close card
     cc:{ background:C.card, border:"1px solid #1e4070", borderRadius:12, padding:"22px 24px" },
     ccTitle:{ display:"flex", alignItems:"center", gap:10, marginBottom:18 },
     ccTxt:{ fontSize:12, fontWeight:700, color:C.accent, letterSpacing:2 },
@@ -190,19 +194,17 @@ export default function App() {
     cisub:{ fontSize:9, color:C.muted },
     ccdiv:{ borderTop:`1px solid ${C.border}`, margin:"14px 0" },
     ccfact:{ fontSize:11, color:C.muted },
-    // form
     fgrid:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 },
     fw:{ display:"flex", flexDirection:"column", gap:4, position:"relative" },
     flbl:{ fontSize:9, color:C.muted, letterSpacing:1.5 },
     finp:{ background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:6, padding:"9px 11px", color:C.text, fontSize:12, fontFamily:"inherit", outline:"none" },
-    calc2:{ display:"flex", alignItems:"center", gap:8, background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:8, padding:"9px 14px", marginBottom:14 },
+    calcBar:{ display:"flex", alignItems:"center", gap:8, background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:8, padding:"9px 14px", marginBottom:14 },
     sbtn:{ background:C.accent, color:C.bg, border:"none", borderRadius:8, padding:"12px 26px", fontSize:11, fontWeight:700, letterSpacing:2, cursor:"pointer", fontFamily:"inherit" },
     sel:{ background:"#0a1830", border:`1px solid ${C.border}`, color:C.text, padding:"5px 10px", borderRadius:6, fontSize:11, fontFamily:"inherit" },
     flash_ok:{ margin:"10px 24px 0", padding:"9px 16px", border:"1px solid #00e596", borderRadius:6, fontSize:12, background:"#00e59618", color:C.green },
     flash_err:{ margin:"10px 24px 0", padding:"9px 16px", border:"1px solid #ff4444", borderRadius:6, fontSize:12, background:"#ff444418", color:"#ff8888" },
     spinner:{ display:"flex", justifyContent:"center", alignItems:"center", height:"60vh", color:C.muted, fontSize:13, letterSpacing:2 },
     delbtn:{ background:"none", border:"1px solid #ff444440", borderRadius:4, color:C.red, padding:"3px 8px", fontSize:10, cursor:"pointer", fontFamily:"inherit" },
-    // delete modal
     overlay:{ position:"fixed", inset:0, background:"#000000cc", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center" },
     modal:{ background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:12, padding:"28px 32px", width:320, display:"flex", flexDirection:"column", gap:14 },
     modalTitle:{ fontSize:14, fontWeight:700, color:C.red, letterSpacing:1 },
@@ -212,20 +214,20 @@ export default function App() {
     modalBtns:{ display:"flex", gap:10 },
     modalConfirm:{ flex:1, background:C.red, color:"#fff", border:"none", borderRadius:6, padding:"10px", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" },
     modalCancel:{ flex:1, background:"none", color:C.muted, border:`1px solid ${C.border}`, borderRadius:6, padding:"10px", fontSize:11, cursor:"pointer", fontFamily:"inherit" },
-    // side calculator
     calcOverlay:{ position:"fixed", inset:0, background:"#000000aa", zIndex:200, display:"flex", justifyContent:"flex-end" },
     calcPanel:{ background:"#0a1830", borderLeft:`1px solid ${C.border}`, width:300, height:"100%", padding:"28px 22px", display:"flex", flexDirection:"column", gap:16, overflowY:"auto" },
     calcTitle:{ fontSize:14, fontWeight:700, color:C.accent, letterSpacing:2 },
     calcDesc:{ fontSize:10, color:C.muted, lineHeight:1.6 },
     calcInp:{ background:"#060f1e", border:`1px solid ${C.border}`, borderRadius:6, padding:"10px 12px", color:C.text, fontSize:13, fontFamily:"inherit", outline:"none", width:"100%", boxSizing:"border-box" },
-    calcRow:{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:C.muted },
+    calcOpRow:{ display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, color:C.muted },
     calcResult:{ background:"#00e59610", border:"1px solid #00e59640", borderRadius:8, padding:"14px 16px", display:"flex", flexDirection:"column", gap:4 },
     calcResultLabel:{ fontSize:9, color:C.muted, letterSpacing:1.5 },
     calcResultValue:{ fontSize:24, fontWeight:700, color:C.green },
+    calcResultSub:{ fontSize:10, color:C.muted },
+    calcResultEmpty:{ background:"#1a305020", border:`1px solid ${C.border}`, borderRadius:8, padding:"14px 16px", display:"flex", flexDirection:"column", gap:4 },
     calcClose:{ background:"none", border:`1px solid ${C.border}`, borderRadius:6, color:C.muted, padding:"10px", fontSize:11, cursor:"pointer", fontFamily:"inherit", marginTop:"auto" },
-    // autocomplete
-    suggBox:{ position:"absolute", top:"100%", left:0, right:0, background:"#0a1830", border:`1px solid ${C.border}`, borderRadius:6, zIndex:50, overflow:"hidden" },
-    suggItem:{ padding:"8px 11px", fontSize:12, color:C.text, cursor:"pointer", borderBottom:`1px solid #0e1e30` },
+    suggBox:{ position:"absolute", top:"100%", left:0, right:0, background:"#0d1f35", border:`1px solid ${C.border}`, borderRadius:6, zIndex:50, overflow:"hidden", boxShadow:"0 4px 20px #000a" },
+    suggItem:{ padding:"8px 12px", fontSize:12, color:C.text, cursor:"pointer", borderBottom:`1px solid #0e1e30` },
   };
 
   const TxRow = ({ tx, i }) => {
@@ -284,10 +286,9 @@ export default function App() {
     );
   };
 
-  // ── Monthly summary bar
   const MonthBar = () => (
     <div style={css.monthBar}>
-      <span style={css.mbLabel}>📊 {cmLabel.toUpperCase()} —</span>
+      <span style={css.mbLabel}>📊 {cmLabel.toUpperCase()}</span>
       {[
         [`€${fmtEUR(cmEur)}`,"EUR procesados",C.accent],
         [`${fmtUSDT(cmIn)} ₮`,"USDT recibido",C.recv],
@@ -298,11 +299,9 @@ export default function App() {
           <span style={{...css.mbStatValue,color:c}}>{v}</span>
         </div>
       ))}
-      <div style={{marginLeft:"auto"}}>
-        <div style={css.mbUtility}>
-          <span style={css.mbUtilityLabel}>UTILIDAD DEL MES</span>
-          <span style={css.mbUtilityValue}>{cmUtil>=0?"+":""}{fmtUSDT(cmUtil)} ₮</span>
-        </div>
+      <div style={css.mbUtility}>
+        <span style={css.mbUtilityLabel}>UTILIDAD DEL MES</span>
+        <span style={css.mbUtilityValue}>{cmUtil>=0?"+":""}{fmtUSDT(cmUtil)} ₮</span>
       </div>
     </div>
   );
@@ -342,29 +341,32 @@ export default function App() {
         <div style={css.calcOverlay} onClick={()=>setShowCalc(false)}>
           <div style={css.calcPanel} onClick={e=>e.stopPropagation()}>
             <div style={css.calcTitle}>🧮 CALCULADORA</div>
-            <div style={css.calcDesc}>Calculá los USDT que recibirás del proveedor según el EUR enviado y la tasa del día.</div>
+            <div style={css.calcDesc}>
+              Introducí los EUR del cliente y la tasa del proveedor.<br/>
+              Fórmula: EUR ÷ tasa = USDT a recibir.
+            </div>
             <div style={css.fw}>
-              <label style={css.flbl}>EUR enviado por el cliente</label>
+              <label style={css.flbl}>EUR enviados por el cliente</label>
               <input style={css.calcInp} type="number" placeholder="Ej: 20.00"
                 value={calcEur} onChange={e=>setCalcEur(e.target.value)}/>
             </div>
-            <div style={{...css.calcRow, fontSize:20, color:C.muted, justifyContent:"center"}}>×</div>
+            <div style={css.calcOpRow}>÷</div>
             <div style={css.fw}>
-              <label style={css.flbl}>Tasa proveedor (USDT/EUR)</label>
+              <label style={css.flbl}>Tasa proveedor (EUR/USDT)</label>
               <input style={css.calcInp} type="number" step="0.0001" placeholder="Ej: 0.9032"
                 value={calcRate} onChange={e=>setCalcRate(e.target.value)}/>
             </div>
-            <div style={{...css.calcRow, fontSize:20, color:C.muted, justifyContent:"center"}}>=</div>
+            <div style={css.calcOpRow}>=</div>
             {calcResult ? (
               <div style={css.calcResult}>
                 <span style={css.calcResultLabel}>USDT A RECIBIR DEL PROVEEDOR</span>
                 <span style={css.calcResultValue}>{calcResult} ₮</span>
-                <span style={{fontSize:10,color:C.muted}}>{calcEur} EUR × {calcRate} = {calcResult} USDT</span>
+                <span style={css.calcResultSub}>{calcEur} EUR ÷ {calcRate} = {calcResult} USDT</span>
               </div>
             ) : (
-              <div style={{...css.calcResult, background:"#1a305020", borderColor:C.border}}>
+              <div style={css.calcResultEmpty}>
                 <span style={css.calcResultLabel}>USDT A RECIBIR DEL PROVEEDOR</span>
-                <span style={{fontSize:18,color:C.muted}}>—</span>
+                <span style={{fontSize:18,color:C.muted}}>— Completá los campos —</span>
               </div>
             )}
             <button style={css.calcClose} onClick={()=>setShowCalc(false)}>✕ Cerrar calculadora</button>
@@ -465,28 +467,45 @@ export default function App() {
           <h2 style={{...css.stitle,marginBottom:18}}>Registrar nueva operación</h2>
           <div style={css.fgrid}>
 
-            {/* CLIENT with autocomplete */}
-            <div style={css.fw} ref={clientRef}>
+            {/* CLIENT autocomplete */}
+            <div style={css.fw}>
               <label style={css.flbl}>Cliente *</label>
               <input style={css.finp} type="text" placeholder="Nombre completo"
-                value={form.client}
-                onChange={e=>handleClientInput(e.target.value)}
-                onBlur={()=>setTimeout(()=>setShowSuggestions(false),150)}
-                autoComplete="off"
+                value={form.client} autoComplete="off"
+                onChange={e=>{ setForm({...form,client:e.target.value}); setShowClientSugg(true); }}
+                onBlur={()=>setTimeout(()=>setShowClientSugg(false),150)}
               />
-              {showSuggestions && (
+              {showClientSugg && clientSuggestions.length>0 && (
                 <div style={css.suggBox}>
                   {clientSuggestions.map(name=>(
-                    <div key={name} style={css.suggItem}
-                      onMouseDown={()=>selectClient(name)}
-                    >👤 {name}</div>
+                    <div key={name} style={css.suggItem} onMouseDown={()=>{ setForm({...form,client:name}); setShowClientSugg(false); }}>
+                      👤 {name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ACCOUNT autocomplete */}
+            <div style={css.fw}>
+              <label style={css.flbl}>Cuenta / destino</label>
+              <input style={css.finp} type="text" placeholder="Plataforma · @usuario"
+                value={form.account} autoComplete="off"
+                onChange={e=>{ setForm({...form,account:e.target.value}); setShowAccountSugg(true); }}
+                onBlur={()=>setTimeout(()=>setShowAccountSugg(false),150)}
+              />
+              {showAccountSugg && accountSuggestions.length>0 && (
+                <div style={css.suggBox}>
+                  {accountSuggestions.map(acc=>(
+                    <div key={acc} style={css.suggItem} onMouseDown={()=>{ setForm({...form,account:acc}); setShowAccountSugg(false); }}>
+                      💳 {acc}
+                    </div>
                   ))}
                 </div>
               )}
             </div>
 
             {[
-              ["Cuenta / destino","account","text","Plataforma · @usuario"],
               ["Monto EUR *","eurAmount","number","0.00"],
               ["USDT recibido *","usdtIn","number","0.0000"],
               ["USDT enviado *","usdtOut","number","0.0000"],
@@ -498,8 +517,9 @@ export default function App() {
               </div>
             ))}
           </div>
+
           {form.usdtIn && form.usdtOut && (
-            <div style={css.calc2}>
+            <div style={css.calcBar}>
               <span style={{fontSize:10,color:C.muted,letterSpacing:1}}>Utilidad estimada:</span>
               <span style={{fontSize:16,fontWeight:700,color:(parseFloat(form.usdtIn||0)-parseFloat(form.usdtOut||0))>=0?C.green:C.red}}>
                 {fmtUSDT(parseFloat(form.usdtIn||0)-parseFloat(form.usdtOut||0))} USDT
